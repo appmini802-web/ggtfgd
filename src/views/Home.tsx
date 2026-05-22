@@ -9,23 +9,55 @@ interface HomeProps {
   onReward: (amount: number) => void;
 }
 
+const MAX_DAILY_ADS = 20;
+
+function getTodayKey(userId: string) {
+  return `adsWatched_${new Date().toISOString().slice(0, 10)}_${userId}`;
+}
+
+function getCooldownKey(userId: string) {
+  return `adsCooldown_${userId}`;
+}
+
+function readAdsWatched(userId: string): number {
+  try {
+    return parseInt(localStorage.getItem(getTodayKey(userId)) || '0', 10);
+  } catch {
+    return 0;
+  }
+}
+
+function readCooldown(userId: string): number {
+  try {
+    const raw = localStorage.getItem(getCooldownKey(userId));
+    if (!raw) return 0;
+    const { until } = JSON.parse(raw);
+    const remaining = Math.ceil((until - Date.now()) / 1000);
+    return remaining > 0 ? remaining : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export default function Home({ userId, userData, onReward }: HomeProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const MAX_DAILY_ADS = 20;
-  const [adsWatched, setAdsWatched] = useState(0);
-  const [cooldown, setCooldown] = useState(0);
+  // بازدید روزانه — از localStorage خوانده می‌شه تا بعد از refresh باقی بمونه
+  const [adsWatched, setAdsWatched] = useState<number>(() => readAdsWatched(userId));
+
+  // cooldown باقی‌مانده — زمان انقضا در localStorage ذخیره می‌شه
+  const [cooldown, setCooldown] = useState<number>(() => readCooldown(userId));
 
   const rawBlockId = import.meta.env.VITE_ADSGRAM_BLOCK_ID;
   const isSetup = rawBlockId && rawBlockId !== 'xxxx-xxxx-xxxx-xxxx' && rawBlockId !== '';
   const blockId = isSetup ? rawBlockId : 'test-block-id';
 
+  // تایمر cooldown
   useEffect(() => {
-    if (cooldown > 0) {
-      const timer = setTimeout(() => setCooldown(cooldown - 1), 1000);
-      return () => clearTimeout(timer);
-    }
+    if (cooldown <= 0) return;
+    const timer = setTimeout(() => setCooldown(c => c - 1), 1000);
+    return () => clearTimeout(timer);
   }, [cooldown]);
 
   const awardAdReward = async () => {
@@ -38,8 +70,23 @@ export default function Home({ userId, userData, onReward }: HomeProps) {
       const data = await response.json();
       if (data.success) {
         onReward(100);
-        setAdsWatched(prev => prev + 1);
-        setCooldown(30);
+
+        // ذخیره تعداد بازدید در localStorage
+        setAdsWatched(prev => {
+          const next = prev + 1;
+          try { localStorage.setItem(getTodayKey(userId), String(next)); } catch {}
+          return next;
+        });
+
+        // ذخیره زمان انقضای cooldown در localStorage
+        const cooldownSeconds = 30;
+        setCooldown(cooldownSeconds);
+        try {
+          localStorage.setItem(
+            getCooldownKey(userId),
+            JSON.stringify({ until: Date.now() + cooldownSeconds * 1000 })
+          );
+        } catch {}
       } else {
         setError(data.error || 'خطا در ثبت پاداش');
       }
@@ -60,7 +107,6 @@ export default function Home({ userId, userData, onReward }: HomeProps) {
     setError(null);
 
     if (!isSetup) {
-      // حالت دمو — بدون Block ID واقعی
       setIsPlaying(true);
       setTimeout(async () => {
         await awardAdReward();
@@ -110,7 +156,9 @@ export default function Home({ userId, userData, onReward }: HomeProps) {
               <TrendingUp className="w-4 h-4 text-cyan-400" />
               <span className="text-[10px] text-white/60 font-bold">بازدید امروز</span>
             </div>
-            <div className="text-xl font-bold text-white">{adsWatched} / {MAX_DAILY_ADS}</div>
+            <div className="text-xl font-bold text-white">
+              {adsWatched} / {MAX_DAILY_ADS}
+            </div>
             <div className="w-full bg-white/10 h-1.5 mt-3 rounded-full overflow-hidden">
               <div
                 className="bg-gradient-to-r from-cyan-400 to-blue-500 h-full transition-all"
@@ -194,3 +242,4 @@ export default function Home({ userId, userData, onReward }: HomeProps) {
     </div>
   );
 }
+
